@@ -1,0 +1,129 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+$install_puppet = <<-PUPPET
+sudo apt-get update -y
+sudo apt-get install -y puppet
+PUPPET
+
+# Script para instalar Consul
+$script = <<SCRIPT
+echo "Installing dependencies ..."
+sudo apt-get update
+sudo apt-get install -y unzip curl jq dnsutils vim
+
+echo "Adding HashiCorp GPG key and repository..."
+wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install consul
+
+
+# Configurar Consul en cliente1
+if [[ "$(hostname)" == "cliente1" ]]; then
+    echo "Configuring Consul on cliente1..."
+    sudo consul agent -node=agente-uno -bind=193.168.100.5 -enable-script-checks=true -data-dir=/tmp/consul -config-dir=/etc/consul.d > /dev/null 2>&1 &
+    sudo apt-get install -y nodejs
+    sudo apt-get install -y npm
+    
+    git clone https://github.com/joseswan01/consulService
+    cd consulService/app && npm install consul express && node index.js 3004 &
+fi
+
+# Configurar Consul en cliente2
+if [[ "$(hostname)" == "cliente2" ]]; then
+    echo "Configuring Consul on cliente2..."
+    sudo consul agent -node=agente-dos -bind=193.168.100.6 -enable-script-checks=true -data-dir=/tmp/consul -config-dir=/etc/consul.d > /dev/null 2>&1 &
+    sudo apt-get install -y nodejs
+    sudo apt-get install -y npm
+    
+    git clone https://github.com/joseswan01/consulService
+    cd consulService/app && npm install consul express && node index2.js 3005 &
+fi
+
+SCRIPT
+
+Vagrant.configure("2") do |config|
+
+    if Vagrant.has_plugin? "vagrant-vbguest"
+      config.vbguest.no_install  = true
+      config.vbguest.auto_update = false
+      config.vbguest.no_remote   = true
+    end
+
+    config.vm.define :webProject1 do |webProject1|  
+      webProject1.vm.box = "bento/ubuntu-22.04"
+      webProject1.vm.network :private_network, ip: "193.168.100.3"
+      webProject1.vm.hostname = "webProject1"
+      webProject1.vm.boot_timeout = 800
+      webProject1.vm.box_download_insecure = true
+      webProject1.vm.synced_folder "C:/Vagrant/synchronized_folder_web1", "/home/vagrant/synchronized_folder_web1"
+
+      webProject1.vm.provision "shell", inline: <<-SHELL
+        echo 'export private_ip=193.168.100.3' >> /home/vagrant/.bashrc
+        echo 'export microservice_name=my_microservice_1' >> /home/vagrant/.bashrc
+      SHELL
+
+      webProject1.vm.provision "shell", inline: <<-SHELL
+        echo "193.168.100.3 consul.service.consul" >> /etc/hosts
+      SHELL
+
+      webProject1.vm.provision "shell", inline: $install_puppet     
+      webProject1.vm.provision :puppet do |puppet|
+        puppet.manifests_path = "puppet/manifests"
+        puppet.manifest_file = "site.pp"
+        puppet.module_path = "puppet/modules"
+        puppet.facter = {
+          "private_ip" => "193.168.100.3",
+          "microservice_name" => "my_microservice_1"
+        }
+      end    
+    end
+
+    config.vm.define :webProject2 do |webProject2|
+      webProject2.vm.box = "bento/ubuntu-22.04"
+      webProject2.vm.network :private_network, ip: "193.168.100.4"
+      webProject2.vm.hostname = "webProject2"
+      webProject2.vm.boot_timeout = 800
+      webProject2.vm.box_download_insecure = true
+      webProject2.vm.synced_folder "C:/Vagrant/synchronized_folder_web2", "/home/vagrant/synchronized_folder_web2"
+
+      webProject2.vm.provision "shell", inline: <<-SHELL
+        echo 'export private_ip=193.168.100.4' >> /home/vagrant/.bashrc
+        echo 'export microservicio=my_microservice_2' >> /home/vagrant/.bashrc
+      SHELL
+
+      webProject2.vm.provision "shell", inline: <<-SHELL
+        echo "193.168.100.4 consul.service.consul" >> /etc/hosts
+      SHELL
+
+      webProject2.vm.provision "shell", inline: $install_puppet     
+      webProject2.vm.provision :puppet do |puppet|
+        puppet.manifests_path = "puppet/manifests"
+        puppet.manifest_file = "site.pp"
+        puppet.module_path = "puppet/modules"
+        puppet.facter = {
+          "private_ip" => "193.168.100.4",
+          "microservicio" => "my_microservice_2"
+        }
+      end
+    end
+
+    config.vm.define :cliente1 do |cliente1|
+      cliente1.vm.box = "bento/ubuntu-22.04"
+      cliente1.vm.hostname = "cliente1"
+      cliente1.vm.network "private_network", ip: "193.168.100.5"
+      cliente1.vm.box_download_insecure = true
+      cliente1.vm.synced_folder "C:/Vagrant/synchronized_folder_web2", "/home/vagrant/synchronized_folder_web3"
+      cliente1.vm.provision "shell", inline: $script
+    end
+
+    config.vm.define :cliente2 do |cliente2|
+      cliente2.vm.box = "bento/ubuntu-22.04"
+      cliente2.vm.hostname = "cliente2"
+      cliente2.vm.network "private_network", ip: "193.168.100.6"
+      cliente2.vm.boot_timeout = 800
+      cliente2.vm.box_download_insecure = true
+      cliente2.vm.synced_folder "C:/Vagrant/synchronized_folder_web2", "/home/vagrant/synchronized_folder_web4"
+      cliente2.vm.provision "shell", inline: $script
+    end
+end
